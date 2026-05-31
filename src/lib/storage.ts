@@ -91,6 +91,30 @@ export function decodeDayFromUrl(encoded: string): DiveDay {
   return migrate(raw)
 }
 
+const LIBRARY_KEY = 'tecplan_cylinder_library'
+
+export function loadCylinderLibrary(): Cylinder[] {
+  try {
+    const raw = localStorage.getItem(LIBRARY_KEY)
+    if (!raw) return []
+    return JSON.parse(raw) as Cylinder[]
+  } catch {
+    return []
+  }
+}
+
+export function upsertLibraryCylinder(cyl: Cylinder): void {
+  const lib = loadCylinderLibrary()
+  const idx = lib.findIndex(c => c.id === cyl.id)
+  if (idx >= 0) lib[idx] = cyl
+  else lib.push(cyl)
+  localStorage.setItem(LIBRARY_KEY, JSON.stringify(lib))
+}
+
+export function deleteLibraryCylinder(id: string): void {
+  localStorage.setItem(LIBRARY_KEY, JSON.stringify(loadCylinderLibrary().filter(c => c.id !== id)))
+}
+
 export async function importDayFromFile(file: File): Promise<DiveDay> {
   const text = await file.text()
   const parsed = JSON.parse(text) as Record<string, unknown>

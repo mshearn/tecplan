@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { DiveDay, Cylinder, DivePlan, GasPhase } from '../types'
 import { simulateDiveDay } from '../lib/simulation'
-import { uid } from '../lib/storage'
+import { uid, loadCylinderLibrary, upsertLibraryCylinder, deleteLibraryCylinder } from '../lib/storage'
 import { fmt } from '../lib/gas'
 import { extractXml, parseSubsurfaceXml } from '../lib/subsurface'
 import type { SubsurfaceImportResult } from '../lib/subsurface'
@@ -97,10 +97,12 @@ export function PlanMode({ day, onChange, onStartChecklist }: Props) {
 function CylinderList({ cylinders, onChange }: { cylinders: Cylinder[], onChange: (c: Cylinder[]) => void }) {
   const [adding, setAdding] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
+  const [showLibrary, setShowLibrary] = useState(false)
 
   function remove(id: string) { onChange(cylinders.filter(c => c.id !== id)) }
   function add(cyl: Cylinder) { onChange([...cylinders, cyl]); setAdding(false) }
   function save(cyl: Cylinder) { onChange(cylinders.map(c => c.id === cyl.id ? cyl : c)); setEditingId(null) }
+  function addFromLibrary(cyl: Cylinder) { onChange([...cylinders, { ...cyl, id: uid() }]) }
 
   return (
     <div>
@@ -125,10 +127,55 @@ function CylinderList({ cylinders, onChange }: { cylinders: Cylinder[], onChange
             </div>
           )
       ))}
+      {showLibrary && (
+        <LibraryPicker onAdd={c => { addFromLibrary(c); setShowLibrary(false) }} onClose={() => setShowLibrary(false)} />
+      )}
       {adding
         ? <CylinderForm onSave={add} onCancel={() => setAdding(false)} />
-        : <button className="btn-ghost btn-sm" style={{ marginTop: 8 }} onClick={() => setAdding(true)}>+ Add cylinder</button>
+        : (
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <button className="btn-ghost btn-sm" onClick={() => { setAdding(true); setShowLibrary(false) }}>+ Add cylinder</button>
+            <button className="btn-ghost btn-sm" onClick={() => { setShowLibrary(s => !s); setAdding(false) }}>
+              {showLibrary ? 'Cancel' : 'Load from library'}
+            </button>
+          </div>
+        )
       }
+    </div>
+  )
+}
+
+function LibraryPicker({ onAdd, onClose }: { onAdd: (cyl: Cylinder) => void, onClose: () => void }) {
+  const [lib, setLib] = useState<Cylinder[]>(() => loadCylinderLibrary())
+
+  function remove(id: string) {
+    deleteLibraryCylinder(id)
+    setLib(loadCylinderLibrary())
+  }
+
+  return (
+    <div className="form-inline" style={{ marginTop: 8 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+        <strong style={{ fontSize: 13 }}>Cylinder library</strong>
+        <button className="btn-ghost btn-sm" onClick={onClose}>✕</button>
+      </div>
+      {lib.length === 0 ? (
+        <p style={{ fontSize: 12, color: '#888' }}>
+          No saved cylinders yet. Add a cylinder below and use "Save to library" to store your gear.
+        </p>
+      ) : lib.map(cyl => (
+        <div key={cyl.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', borderBottom: '1px solid #f0f0f0' }}>
+          <div className="cyl-icon">{cyl.type === 'back_gas' ? 'BG' : 'S'}</div>
+          <div style={{ flex: 1, fontSize: 12 }}>
+            <strong>{cyl.label}</strong>
+            <span style={{ color: '#888', marginLeft: 6 }}>
+              {cyl.count > 1 ? `${cyl.count}× ` : ''}{cyl.ratedVolume} ft³ · {cyl.ratedPressure} PSI · {cyl.mix}
+            </span>
+          </div>
+          <button className="btn btn-sm" onClick={() => onAdd(cyl)}>Add</button>
+          <button className="btn-ghost btn-sm" style={{ color: '#c0392b', borderColor: '#f0b0aa' }} onClick={() => remove(cyl.id)}>✕</button>
+        </div>
+      ))}
     </div>
   )
 }
@@ -143,16 +190,15 @@ function CylinderForm({
   const [ratedPressure, setRatedPressure] = useState(initial?.ratedPressure ?? 3000)
   const [count, setCount] = useState(initial?.count ?? 1)
   const [refill, setRefill] = useState(initial?.refillBetweenDives ?? (initial?.type !== 'stage'))
+  const [libSaved, setLibSaved] = useState(false)
 
-  // When type changes, update refill default
   function handleTypeChange(t: 'back_gas' | 'stage') {
     setType(t)
     if (!initial) setRefill(t === 'back_gas')
   }
 
-  function save() {
-    if (!label.trim()) return
-    onSave({
+  function buildCyl(): Cylinder {
+    return {
       id: initial?.id ?? uid(),
       label: label.trim(),
       type,
@@ -161,7 +207,19 @@ function CylinderForm({
       ratedPressure,
       count,
       refillBetweenDives: refill,
-    })
+    }
+  }
+
+  function save() {
+    if (!label.trim()) return
+    onSave(buildCyl())
+  }
+
+  function saveToLibrary() {
+    if (!label.trim()) return
+    upsertLibraryCylinder(buildCyl())
+    setLibSaved(true)
+    setTimeout(() => setLibSaved(false), 2000)
   }
 
   return (
@@ -207,6 +265,9 @@ function CylinderForm({
       <div className="form-actions">
         <button className="btn" onClick={save}>{initial ? 'Save' : 'Add cylinder'}</button>
         <button className="btn-ghost" onClick={onCancel}>Cancel</button>
+        <button className="btn-ghost btn-sm" style={{ marginLeft: 'auto' }} onClick={saveToLibrary}>
+          {libSaved ? '✓ Saved to library' : 'Save to library'}
+        </button>
       </div>
     </div>
   )
