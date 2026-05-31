@@ -380,6 +380,7 @@ interface ProfileRow {
 function computePhasesFromProfile(
   rows: ProfileRow[],
   sacCfm: number,
+  transitRateFtMin: number,
   cylinders: Cylinder[],
 ): { phases: GasPhase[]; bottomDepth: number; bottomTime: number; totalRuntime: number } | null {
   if (rows.length === 0 || sacCfm <= 0) return null
@@ -414,7 +415,12 @@ function computePhasesFromProfile(
     // Transit to next row — uses current row's gas
     if (i < sorted.length - 1) {
       const next = sorted[i + 1]
-      const dur = next.arriveMin - (row.arriveMin + row.stopMin)
+      const listedDur = next.arriveMin - (row.arriveMin + row.stopMin)
+      const depthChange = Math.abs(next.depth - row.depth)
+      // DM5 rounds to whole minutes at 60 ft/min, so a 30 ft transit appears as 0 min.
+      // When the table shows 0 but depths differ, infer actual transit time from the rate.
+      const dur = listedDur > 0 ? listedDur
+        : (depthChange > 0 && transitRateFtMin > 0 ? depthChange / transitRateFtMin : 0)
       if (dur > 0) {
         const avg = (row.depth + next.depth) / 2
         const transitDepth = Math.max(row.depth, next.depth)
@@ -457,6 +463,7 @@ function ProfileCalculator({
   onCancel: () => void
 }) {
   const [sacCfm, setSacCfm] = useState(0.75)
+  const [transitRate, setTransitRate] = useState(60)  // ft/min
   const [rows, setRows] = useState<ProfileRow[]>([
     { id: uid(), depth: 0, arriveMin: 0, stopMin: 0, cylId: cylinders[0]?.id ?? '' },
   ])
@@ -476,7 +483,7 @@ function ProfileCalculator({
 
   function calculate() {
     setError(null)
-    const result = computePhasesFromProfile(rows, sacCfm, cylinders)
+    const result = computePhasesFromProfile(rows, sacCfm, transitRate, cylinders)
     if (!result || result.phases.length === 0) {
       setError('Could not compute phases — check that depths, times, and SAC rate are filled in')
       return
@@ -500,6 +507,18 @@ function ProfileCalculator({
             style={{ width: 70, border: '1px solid #ccc', borderRadius: 4, padding: '4px 8px', fontSize: 13, background: '#fafafa' }}
           />
           <span style={{ color: '#aaa', fontSize: 11 }}>≈ {Math.round(sacCfm / 0.035316)} L/min</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+          <label style={{ color: '#555', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.3px' }}>
+            Transit rate (ft/min)
+          </label>
+          <input
+            type="number"
+            value={transitRate}
+            onChange={e => setTransitRate(Number(e.target.value))}
+            style={{ width: 70, border: '1px solid #ccc', borderRadius: 4, padding: '4px 8px', fontSize: 13, background: '#fafafa' }}
+          />
+          <span style={{ color: '#aaa', fontSize: 11 }}>used when table shows 0 min transit</span>
         </div>
       </div>
 
