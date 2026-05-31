@@ -381,7 +381,6 @@ function computePhasesFromProfile(
   rows: ProfileRow[],
   sacCfm: number,
   transitRateFtMin: number,
-  cylinders: Cylinder[],
 ): { phases: GasPhase[]; bottomDepth: number; bottomTime: number; totalRuntime: number } | null {
   if (rows.length === 0 || sacCfm <= 0) return null
   const sorted = [...rows].sort((a, b) => a.arriveMin - b.arriveMin)
@@ -483,7 +482,7 @@ function ProfileCalculator({
 
   function calculate() {
     setError(null)
-    const result = computePhasesFromProfile(rows, sacCfm, transitRate, cylinders)
+    const result = computePhasesFromProfile(rows, sacCfm, transitRate)
     if (!result || result.phases.length === 0) {
       setError('Could not compute phases — check that depths, times, and SAC rate are filled in')
       return
