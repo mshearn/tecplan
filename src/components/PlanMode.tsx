@@ -367,6 +367,223 @@ function DiveSequence({
   )
 }
 
+// ─── Profile-based gas calculator ────────────────────────────────────────────
+
+interface ProfileRow {
+  id: string
+  depth: number      // ft
+  arriveMin: number  // cumulative minutes from dive start (DM5 "Dive time")
+  stopMin: number    // minutes at this depth (DM5 "Stop time")
+  cylId: string
+}
+
+function computePhasesFromProfile(
+  rows: ProfileRow[],
+  sacCfm: number,
+  cylinders: Cylinder[],
+): { phases: GasPhase[]; bottomDepth: number; bottomTime: number; totalRuntime: number } | null {
+  if (rows.length === 0 || sacCfm <= 0) return null
+  const sorted = [...rows].sort((a, b) => a.arriveMin - b.arriveMin)
+
+  const cylVol = new Map<string, number>()
+  const cylDur = new Map<string, number>()
+  const cylMaxDepth = new Map<string, number>()
+  const cylOrder = new Map<string, number>()
+  let orderIdx = 0
+
+  function acc(cylId: string, vol: number, dur: number, depth: number) {
+    cylVol.set(cylId, (cylVol.get(cylId) ?? 0) + vol)
+    cylDur.set(cylId, (cylDur.get(cylId) ?? 0) + dur)
+    cylMaxDepth.set(cylId, Math.max(cylMaxDepth.get(cylId) ?? 0, depth))
+    if (!cylOrder.has(cylId)) cylOrder.set(cylId, orderIdx++)
+  }
+
+  // Descent from surface to first waypoint — uses first row's cylinder
+  const first = sorted[0]
+  if (first.arriveMin > 0) {
+    const avg = first.depth / 2
+    acc(first.cylId, sacCfm * first.arriveMin * (avg / 33 + 1), first.arriveMin, first.depth)
+  }
+
+  for (let i = 0; i < sorted.length; i++) {
+    const row = sorted[i]
+    // Stop at this depth
+    if (row.stopMin > 0) {
+      acc(row.cylId, sacCfm * row.stopMin * (row.depth / 33 + 1), row.stopMin, row.depth)
+    }
+    // Transit to next row — uses current row's gas
+    if (i < sorted.length - 1) {
+      const next = sorted[i + 1]
+      const dur = next.arriveMin - (row.arriveMin + row.stopMin)
+      if (dur > 0) {
+        const avg = (row.depth + next.depth) / 2
+        const transitDepth = Math.max(row.depth, next.depth)
+        acc(row.cylId, sacCfm * dur * (avg / 33 + 1), dur, transitDepth)
+      }
+    }
+  }
+
+  const maxDepth = Math.max(...sorted.map(r => r.depth))
+  const deepestRows = sorted.filter(r => r.depth >= maxDepth * 0.9)
+  const lastDeep = deepestRows[deepestRows.length - 1]
+  const bottomTime = lastDeep ? lastDeep.arriveMin + lastDeep.stopMin : 0
+
+  const last = sorted[sorted.length - 1]
+  const totalRuntime = last.arriveMin + last.stopMin
+
+  const phases: GasPhase[] = [...cylVol.entries()]
+    .sort((a, b) => (cylOrder.get(a[0]) ?? 0) - (cylOrder.get(b[0]) ?? 0))
+    .map(([cylId, vol]) => {
+      const maxD = cylMaxDepth.get(cylId) ?? 0
+      return {
+        id: uid(),
+        cylinderId: cylId,
+        displayDepth: maxD >= maxDepth * 0.8 ? `${maxDepth} ft bottom` : `${maxD} ft deco`,
+        duration: Math.round(cylDur.get(cylId) ?? 0),
+        requiredVolume: Math.round(vol * 10) / 10,
+      }
+    })
+
+  return { phases, bottomDepth: maxDepth, bottomTime: Math.round(bottomTime), totalRuntime: Math.round(totalRuntime) }
+}
+
+function ProfileCalculator({
+  cylinders,
+  onCompute,
+  onCancel,
+}: {
+  cylinders: Cylinder[]
+  onCompute: (phases: GasPhase[], bottomDepth: number, bottomTime: number, totalRuntime: number) => void
+  onCancel: () => void
+}) {
+  const [sacCfm, setSacCfm] = useState(0.75)
+  const [rows, setRows] = useState<ProfileRow[]>([
+    { id: uid(), depth: 0, arriveMin: 0, stopMin: 0, cylId: cylinders[0]?.id ?? '' },
+  ])
+  const [error, setError] = useState<string | null>(null)
+
+  function addRow() {
+    setRows(prev => [...prev, { id: uid(), depth: 0, arriveMin: 0, stopMin: 0, cylId: cylinders[0]?.id ?? '' }])
+  }
+
+  function updateRow(id: string, patch: Partial<ProfileRow>) {
+    setRows(prev => prev.map(r => r.id === id ? { ...r, ...patch } : r))
+  }
+
+  function removeRow(id: string) {
+    setRows(prev => prev.filter(r => r.id !== id))
+  }
+
+  function calculate() {
+    setError(null)
+    const result = computePhasesFromProfile(rows, sacCfm, cylinders)
+    if (!result || result.phases.length === 0) {
+      setError('Could not compute phases — check that depths, times, and SAC rate are filled in')
+      return
+    }
+    onCompute(result.phases, result.bottomDepth, result.bottomTime, result.totalRuntime)
+  }
+
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 10 }}>
+        <strong style={{ fontSize: 13 }}>Depth profile calculator</strong>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+          <label style={{ color: '#555', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.3px' }}>
+            SAC rate (ft³/min)
+          </label>
+          <input
+            type="number"
+            step="0.05"
+            value={sacCfm}
+            onChange={e => setSacCfm(Number(e.target.value))}
+            style={{ width: 70, border: '1px solid #ccc', borderRadius: 4, padding: '4px 8px', fontSize: 13, background: '#fafafa' }}
+          />
+          <span style={{ color: '#aaa', fontSize: 11 }}>≈ {Math.round(sacCfm / 0.035316)} L/min</span>
+        </div>
+      </div>
+
+      <p className="subtitle" style={{ marginBottom: 8 }}>
+        Enter rows from your DM5 plan table — Depth, Dive time (arrive), Stop time, Cylinder.
+        Bottom depth, runtime, and gas volumes will be auto-filled.
+      </p>
+
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+          <thead>
+            <tr style={{ borderBottom: '1px solid #eee' }}>
+              <th style={{ textAlign: 'left', padding: '4px 6px', color: '#888', textTransform: 'uppercase', fontSize: 11 }}>Depth (ft)</th>
+              <th style={{ textAlign: 'left', padding: '4px 6px', color: '#888', textTransform: 'uppercase', fontSize: 11 }}>Arrive (min)</th>
+              <th style={{ textAlign: 'left', padding: '4px 6px', color: '#888', textTransform: 'uppercase', fontSize: 11 }}>Stop (min)</th>
+              <th style={{ textAlign: 'left', padding: '4px 6px', color: '#888', textTransform: 'uppercase', fontSize: 11 }}>Cylinder</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(row => (
+              <tr key={row.id}>
+                <td style={{ padding: '3px 6px' }}>
+                  <input
+                    type="number"
+                    value={row.depth}
+                    onChange={e => updateRow(row.id, { depth: Number(e.target.value) })}
+                    style={{ width: 70, border: '1px solid #ccc', borderRadius: 4, padding: '4px 6px', fontSize: 13, background: '#fafafa' }}
+                  />
+                </td>
+                <td style={{ padding: '3px 6px' }}>
+                  <input
+                    type="number"
+                    value={row.arriveMin}
+                    onChange={e => updateRow(row.id, { arriveMin: Number(e.target.value) })}
+                    style={{ width: 70, border: '1px solid #ccc', borderRadius: 4, padding: '4px 6px', fontSize: 13, background: '#fafafa' }}
+                  />
+                </td>
+                <td style={{ padding: '3px 6px' }}>
+                  <input
+                    type="number"
+                    value={row.stopMin}
+                    onChange={e => updateRow(row.id, { stopMin: Number(e.target.value) })}
+                    style={{ width: 70, border: '1px solid #ccc', borderRadius: 4, padding: '4px 6px', fontSize: 13, background: '#fafafa' }}
+                  />
+                </td>
+                <td style={{ padding: '3px 6px' }}>
+                  <select
+                    value={row.cylId}
+                    onChange={e => updateRow(row.id, { cylId: e.target.value })}
+                    style={{ border: '1px solid #ccc', borderRadius: 4, padding: '4px 6px', fontSize: 13, background: '#fafafa' }}
+                  >
+                    {cylinders.map(c => (
+                      <option key={c.id} value={c.id}>{c.label} ({c.mix})</option>
+                    ))}
+                  </select>
+                </td>
+                <td style={{ padding: '3px 6px' }}>
+                  <button
+                    className="btn-ghost btn-sm"
+                    onClick={() => removeRow(row.id)}
+                    style={{ padding: '2px 8px' }}
+                  >×</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <button className="btn-ghost btn-sm" onClick={addRow} style={{ marginTop: 6 }}>+ Add row</button>
+
+      {error && <div className="alert alert-short" style={{ marginTop: 8 }}>{error}</div>}
+
+      <div className="form-actions">
+        <button className="btn" onClick={calculate}>Calculate phases</button>
+        <button className="btn-ghost" onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
+  )
+}
+
+// ─── DivePlanForm ─────────────────────────────────────────────────────────────
+
 function DivePlanForm({
   cylinders, initial, onSave, onCancel,
 }: { cylinders: Cylinder[], initial?: DivePlan, onSave: (d: DivePlan) => void, onCancel: () => void }) {
@@ -377,9 +594,23 @@ function DivePlanForm({
   const [turnPressure, setTurnPressure] = useState(initial?.turnPressure ?? 2000)
   const [phases, setPhases] = useState<GasPhase[]>(initial?.gasPhases ?? [])
   const [addingPhase, setAddingPhase] = useState(false)
+  const [showProfileCalc, setShowProfileCalc] = useState(false)
 
   function addPhase(p: GasPhase) { setPhases([...phases, p]); setAddingPhase(false) }
   function removePhase(id: string) { setPhases(phases.filter(p => p.id !== id)) }
+
+  function handleProfileCompute(
+    computedPhases: GasPhase[],
+    bottomDepth: number,
+    bt: number,
+    rt: number,
+  ) {
+    setPhases(computedPhases)
+    setDepth(bottomDepth)
+    setBottomTime(bt)
+    setRuntime(rt)
+    setShowProfileCalc(false)
+  }
 
   function save() {
     if (!label.trim() || phases.length === 0) return
@@ -430,10 +661,7 @@ function DivePlanForm({
         </div>
       </div>
 
-      <div className="section-label">Gas phases — from your deco software output</div>
-      <p className="subtitle" style={{ marginBottom: 8 }}>
-        One row per gas. Volume required = ft³ consumed for that phase at your SAC rate (from your deco plan).
-      </p>
+      <div className="section-label">Gas phases</div>
       {phases.map((p) => {
         const cyl = cylinders.find(c => c.id === p.cylinderId)
         return (
@@ -446,10 +674,25 @@ function DivePlanForm({
           </div>
         )
       })}
-      {addingPhase
-        ? <GasPhaseForm cylinders={cylinders} onSave={addPhase} onCancel={() => setAddingPhase(false)} />
-        : <button className="btn-ghost btn-sm" onClick={() => setAddingPhase(true)}>+ Add gas phase</button>
-      }
+
+      {showProfileCalc ? (
+        <ProfileCalculator
+          cylinders={cylinders}
+          onCompute={handleProfileCompute}
+          onCancel={() => setShowProfileCalc(false)}
+        />
+      ) : addingPhase ? (
+        <GasPhaseForm cylinders={cylinders} onSave={addPhase} onCancel={() => setAddingPhase(false)} />
+      ) : (
+        <div style={{ display: 'flex', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
+          <button className="btn-ghost btn-sm" onClick={() => setAddingPhase(true)}>+ Add gas phase</button>
+          {cylinders.length > 0 && (
+            <button className="btn-ghost btn-sm" onClick={() => setShowProfileCalc(true)}>
+              ↗ Compute from depth profile (DM5 / deco table)
+            </button>
+          )}
+        </div>
+      )}
 
       <div className="form-actions" style={{ marginTop: 14 }}>
         <button className="btn" onClick={save} disabled={!label.trim() || phases.length === 0}>
