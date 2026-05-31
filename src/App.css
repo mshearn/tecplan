@@ -235,6 +235,26 @@ main { flex: 1; padding: 24px; max-width: 800px; width: 100%; margin: 0 auto; }
 }
 .import-label:hover { border-color: #aaa; }
 
+/* ─── QR modal ─── */
+.qr-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.55);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 100;
+}
+.qr-modal {
+  background: #fff;
+  border-radius: 10px;
+  padding: 20px;
+  display: flex; flex-direction: column; align-items: center;
+  max-width: 340px; width: 90%;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.25);
+}
+.qr-header {
+  display: flex; justify-content: space-between; align-items: center;
+  width: 100%; margin-bottom: 14px;
+}
+
 /* ─── Data table ─── */
 .data-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 12px; }
 .data-table th { text-align: left; font-size: 11px; text-transform: uppercase; color: #888; font-weight: 600; padding: 6px 8px; border-bottom: 1px solid #eee; }

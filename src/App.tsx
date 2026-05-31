@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import type { DiveDay } from './types'
-import { loadDays, upsertDay, deleteDay, uid, exportDay, importDayFromFile } from './lib/storage'
+import { loadDays, upsertDay, deleteDay, uid, exportDay, importDayFromFile, decodeDayFromUrl } from './lib/storage'
+import { QrModal } from './components/QrModal'
 import { PlanMode } from './components/PlanMode'
 import { ChecklistMode } from './components/ChecklistMode'
 import { PrintPlan } from './components/PrintPlan'
@@ -28,9 +29,26 @@ function newDay(): DiveDay {
 export default function App() {
   const [days, setDays] = useState<DiveDay[]>([])
   const [view, setView] = useState<View>({ mode: 'home' })
+  const [qrDay, setQrDay] = useState<DiveDay | null>(null)
 
   useEffect(() => {
-    setDays(loadDays())
+    // Check for ?d= QR import parameter
+    const params = new URLSearchParams(window.location.search)
+    const encoded = params.get('d')
+    if (encoded) {
+      try {
+        const day = decodeDayFromUrl(encoded)
+        upsertDay(day)
+        window.history.replaceState({}, '', window.location.pathname)
+        setDays(loadDays())
+        setView({ mode: 'plan', dayId: day.id })
+      } catch {
+        // Malformed QR data — ignore and load normally
+        setDays(loadDays())
+      }
+    } else {
+      setDays(loadDays())
+    }
   }, [])
 
   function updateDay(day: DiveDay) {
@@ -135,6 +153,9 @@ export default function App() {
           <div className="mode-tabs">
             <span className="mode-tab active">Plan</span>
           </div>
+          <button className="btn-ghost btn-sm no-print" onClick={() => setQrDay(day)}>
+            Share QR
+          </button>
           <button className="btn-ghost btn-sm no-print" onClick={() => exportDay(day)}>
             Export
           </button>
@@ -152,6 +173,13 @@ export default function App() {
           />
         </main>
         <PrintPlan day={day} />
+        {qrDay && (
+          <QrModal
+            day={qrDay}
+            baseUrl={`${window.location.origin}${window.location.pathname}`}
+            onClose={() => setQrDay(null)}
+          />
+        )}
       </div>
     )
   }

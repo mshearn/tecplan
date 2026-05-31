@@ -1,3 +1,4 @@
+import { deflateSync, inflateSync, strToU8, strFromU8 } from 'fflate'
 import type { DiveDay, Cylinder } from '../types'
 
 const KEY = 'tecplan_days'
@@ -72,6 +73,22 @@ export function exportDay(day: DiveDay): void {
   a.download = `tecplan-${slug}-${day.date}.json`
   a.click()
   URL.revokeObjectURL(url)
+}
+
+// Compress a dive day to a base64url string small enough for a QR code URL.
+export function encodeDayForUrl(day: DiveDay): string {
+  const json = JSON.stringify(day)
+  const compressed = deflateSync(strToU8(json))
+  return btoa(String.fromCharCode(...compressed))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+export function decodeDayFromUrl(encoded: string): DiveDay {
+  const b64 = encoded.replace(/-/g, '+').replace(/_/g, '/')
+  const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0))
+  const raw = JSON.parse(strFromU8(inflateSync(bytes))) as Record<string, unknown>
+  if (!raw.id || !Array.isArray(raw.dives)) throw new Error('Invalid QR data')
+  return migrate(raw)
 }
 
 export async function importDayFromFile(file: File): Promise<DiveDay> {
