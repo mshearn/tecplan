@@ -61,3 +61,26 @@ export function deleteDay(id: string): void {
 export function uid(): string {
   return crypto.randomUUID()
 }
+
+export function exportDay(day: DiveDay): void {
+  const payload = JSON.stringify({ version: 1, exported: new Date().toISOString(), day }, null, 2)
+  const blob = new Blob([payload], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  const slug = (day.title || 'dive-day').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+  a.download = `tecplan-${slug}-${day.date}.json`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+export async function importDayFromFile(file: File): Promise<DiveDay> {
+  const text = await file.text()
+  const parsed = JSON.parse(text) as Record<string, unknown>
+  // Accept both the wrapped format { version, day } and a bare DiveDay object
+  const raw = (parsed.day ?? parsed) as Record<string, unknown>
+  if (!raw.id || !Array.isArray(raw.dives)) {
+    throw new Error('Not a valid TecPlan export file')
+  }
+  return migrate(raw)
+}

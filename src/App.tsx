@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import type { DiveDay } from './types'
-import { loadDays, upsertDay, deleteDay, uid } from './lib/storage'
+import { loadDays, upsertDay, deleteDay, uid, exportDay, importDayFromFile } from './lib/storage'
 import { PlanMode } from './components/PlanMode'
 import { ChecklistMode } from './components/ChecklistMode'
 import { PrintPlan } from './components/PrintPlan'
@@ -54,6 +54,20 @@ export default function App() {
     setView({ mode: 'home' })
   }
 
+  async function handleImport(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    try {
+      const day = await importDayFromFile(file)
+      upsertDay(day)
+      setDays(loadDays())
+      setView({ mode: 'plan', dayId: day.id })
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to import file')
+    }
+    e.target.value = ''
+  }
+
   if (view.mode === 'home') {
     return (
       <div className="app">
@@ -62,6 +76,11 @@ export default function App() {
           <span className="header-sub">Technical dive planning & verification</span>
         </header>
         <main className="home">
+          <label className="import-label no-print">
+            Import
+            <input type="file" accept=".json" onChange={handleImport} style={{ display: 'none' }} />
+          </label>
+
           {days.length === 0 ? (
             <div className="empty-state">
               <p>No dive days yet.</p>
@@ -116,6 +135,9 @@ export default function App() {
           <div className="mode-tabs">
             <span className="mode-tab active">Plan</span>
           </div>
+          <button className="btn-ghost btn-sm no-print" onClick={() => exportDay(day)}>
+            Export
+          </button>
           {day.dives.length > 0 && (
             <button className="btn-ghost btn-sm no-print" onClick={() => window.print()}>
               Print plan
