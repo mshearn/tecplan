@@ -3,6 +3,7 @@ import type { DiveDay } from './types'
 import { loadDays, upsertDay, deleteDay, uid } from './lib/storage'
 import { PlanMode } from './components/PlanMode'
 import { ChecklistMode } from './components/ChecklistMode'
+import { PrintPlan } from './components/PrintPlan'
 import './App.css'
 
 type View =
@@ -108,21 +109,27 @@ export default function App() {
   if (view.mode === 'plan') {
     return (
       <div className="app">
-        <header className="app-header">
+        <header className="app-header no-print">
           <button className="btn-ghost btn-sm" onClick={goHome}>← Days</button>
           <h1>TecPlan</h1>
           <span className="header-sub">{day.title || day.date}{day.title ? ` · ${day.date}` : ''}</span>
           <div className="mode-tabs">
             <span className="mode-tab active">Plan</span>
           </div>
+          {day.dives.length > 0 && (
+            <button className="btn-ghost btn-sm no-print" onClick={() => window.print()}>
+              Print plan
+            </button>
+          )}
         </header>
-        <main>
+        <main className="no-print">
           <PlanMode
             day={day}
             onChange={updateDay}
             onStartChecklist={i => setView({ mode: 'checklist', dayId: day.id, diveIndex: i })}
           />
         </main>
+        <PrintPlan day={day} />
       </div>
     )
   }

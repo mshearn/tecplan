@@ -882,11 +882,23 @@ function PostDiveForm({
 }) {
   const usedCylIds = new Set(dive.gasPhases.map(p => p.cylinderId))
   const usedCyls = cylinders.filter(c => usedCylIds.has(c.id))
-  const [pressures, setPressures] = useState<Record<string, number>>(() => {
-    const init: Record<string, number> = {}
-    for (const c of usedCyls) init[c.id] = existing?.[c.id] ?? 0
+  // String state so inputs start blank when no prior reading exists
+  const [pressures, setPressures] = useState<Record<string, string>>(() => {
+    const init: Record<string, string> = {}
+    for (const c of usedCyls) init[c.id] = existing?.[c.id] != null ? String(existing[c.id]) : ''
     return init
   })
+
+  const allFilled = usedCyls.every(c => pressures[c.id] !== '' && pressures[c.id] !== undefined)
+
+  function handleSave() {
+    const numeric: Record<string, number> = {}
+    for (const c of usedCyls) {
+      const v = pressures[c.id]
+      if (v !== '' && v !== undefined) numeric[c.id] = Number(v)
+    }
+    onSave(numeric)
+  }
 
   return (
     <div className="form-inline" style={{ marginTop: 10 }}>
@@ -897,14 +909,15 @@ function PostDiveForm({
             <label>{c.label} ({c.mix}) — post-dive PSI</label>
             <input
               type="number"
-              value={pressures[c.id] ?? 0}
-              onChange={e => setPressures(prev => ({ ...prev, [c.id]: Number(e.target.value) }))}
+              placeholder="PSI"
+              value={pressures[c.id] ?? ''}
+              onChange={e => setPressures(prev => ({ ...prev, [c.id]: e.target.value }))}
             />
           </div>
         ))}
       </div>
       <div className="form-actions">
-        <button className="btn btn-sm" onClick={() => onSave(pressures)}>Save</button>
+        <button className="btn btn-sm" disabled={!allFilled} onClick={handleSave}>Save</button>
         <button className="btn-ghost btn-sm" onClick={onCancel}>Cancel</button>
       </div>
     </div>

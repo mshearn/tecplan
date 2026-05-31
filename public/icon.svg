@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="80" fill="#111111"/>
+  <!-- Horizontal bar of T -->
+  <rect x="96" y="110" width="320" height="62" rx="12" fill="white"/>
+  <!-- Vertical stem of T -->
+  <rect x="210" y="110" width="92" height="268" rx="12" fill="white"/>
+  <!-- Wave suggesting water depth -->
+  <path d="M 56 410 Q 120 374 184 410 Q 248 446 312 410 Q 376 374 440 410 L 440 456 Q 376 420 312 456 Q 248 492 184 456 Q 120 420 56 456 Z" fill="white" opacity="0.25"/>
+</svg>
