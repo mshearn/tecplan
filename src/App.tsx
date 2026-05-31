@@ -44,9 +44,13 @@ export default function App() {
 
   function createDay() {
     const day = newDay()
-    upsertDay(day)
-    setDays(loadDays())
+    setDays(prev => [...prev, day])
     setView({ mode: 'plan', dayId: day.id })
+  }
+
+  function goHome() {
+    setDays(loadDays())
+    setView({ mode: 'home' })
   }
 
   if (view.mode === 'home') {
@@ -98,14 +102,14 @@ export default function App() {
   const day = days.find(d => d.id === (view.mode === 'plan' ? view.dayId : view.dayId))
 
   if (!day) {
-    return <div className="app"><p>Day not found.</p><button onClick={() => setView({ mode: 'home' })}>Home</button></div>
+    return <div className="app"><p>Day not found.</p><button onClick={goHome}>Home</button></div>
   }
 
   if (view.mode === 'plan') {
     return (
       <div className="app">
         <header className="app-header">
-          <button className="btn-ghost btn-sm" onClick={() => setView({ mode: 'home' })}>← Days</button>
+          <button className="btn-ghost btn-sm" onClick={goHome}>← Days</button>
           <h1>TecPlan</h1>
           <span className="header-sub">{day.title || day.date}{day.title ? ` · ${day.date}` : ''}</span>
           <div className="mode-tabs">

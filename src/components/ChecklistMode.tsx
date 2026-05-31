@@ -236,8 +236,6 @@ function VerificationScreen({
     setChecked(prev => ({ ...prev, [key]: !prev[key] }))
   }
 
-  const canSignOff = diver1.trim().length > 0 && diver2.trim().length > 0
-
   const staticItems = [
     `Back gas regulator breathes correctly at surface. Both second stages tested. SPG reads ${currentPressures[day.cylinders.find(c => c.type === 'back_gas')?.id ?? ''] ?? '—'} PSI.`,
     ...(day.cylinders.find(c => c.type === 'back_gas')?.count ?? 1) > 1 ? ['Isolator valve open.'] : [],
@@ -250,6 +248,9 @@ function VerificationScreen({
     `Turn pressure: back gas at ${dive.turnPressure} PSI — both divers confirm.`,
     'Dive computer set to correct gas and gradient factors.',
   ]
+
+  const allEquipmentChecked = staticItems.length > 0 && staticItems.every((_, i) => checked[`eq-${i}`])
+  const canSignOff = diver1.trim().length > 0 && diver2.trim().length > 0 && allEquipmentChecked
 
   return (
     <div className="card">
@@ -314,7 +315,7 @@ function VerificationScreen({
           </div>
         )}
 
-        {hasShort && (
+        {hasShort && !existingSignOff && (
           <div className="alert alert-short">
             <strong>Sign-off blocked — gas shortfall unresolved.</strong>
             <button className="btn-ghost btn-sm" style={{ marginLeft: '1rem' }} onClick={() => setShowOverride(!showOverride)}>
@@ -323,7 +324,7 @@ function VerificationScreen({
           </div>
         )}
 
-        {showOverride && hasShort && (
+        {showOverride && hasShort && !existingSignOff && (
           <div className="field">
             <label>Override reason (required)</label>
             <input
@@ -334,7 +335,7 @@ function VerificationScreen({
             <button
               className="btn btn-warn"
               disabled={!canSignOff || overrideReason.trim().length < 10}
-              onClick={() => onSignOff(diver1, diver2, overrideReason)}
+              onClick={() => { onSignOff(diver1, diver2, overrideReason); setShowOverride(false) }}
             >
               Sign off with override
             </button>
