@@ -3,6 +3,8 @@ import type { DiveDay, Cylinder, DivePlan, GasPhase } from '../types'
 import { simulateDiveDay } from '../lib/simulation'
 import { uid } from '../lib/storage'
 import { fmt } from '../lib/gas'
+import { extractXml, parseSubsurfaceXml } from '../lib/subsurface'
+import type { SubsurfaceImportResult } from '../lib/subsurface'
 import { Badge } from './Badge'
 
 interface Props {
@@ -222,6 +224,7 @@ function DiveSequence({
   const [adding, setAdding] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [loggingId, setLoggingId] = useState<string | null>(null)
+  const [showImport, setShowImport] = useState(false)
 
   function remove(id: string) { onChange(day.dives.filter(d => d.id !== id)) }
 
@@ -238,6 +241,15 @@ function DiveSequence({
       postDivePressures: { ...(day.postDivePressures ?? {}), [diveId]: pressures },
     })
     setLoggingId(null)
+  }
+
+  function confirmImport(result: SubsurfaceImportResult) {
+    onUpdateDay({
+      ...day,
+      cylinders: [...day.cylinders, ...result.suggestedCylinders],
+      dives: [...day.dives, ...result.dives],
+    })
+    setShowImport(false)
   }
 
   return (
@@ -334,9 +346,22 @@ function DiveSequence({
         )
       })}
 
+      {showImport && (
+        <SubsurfaceImportPanel
+          day={day}
+          onImport={confirmImport}
+          onCancel={() => setShowImport(false)}
+        />
+      )}
+
       {adding
         ? <DivePlanForm cylinders={day.cylinders} onSave={add} onCancel={() => setAdding(false)} />
-        : <button className="btn-ghost btn-sm" style={{ marginTop: 8 }} onClick={() => setAdding(true)}>+ Add dive</button>
+        : !showImport && (
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <button className="btn-ghost btn-sm" onClick={() => setAdding(true)}>+ Add dive</button>
+            <button className="btn-ghost btn-sm" onClick={() => setShowImport(true)}>↓ Import from Subsurface</button>
+          </div>
+        )
       }
     </div>
   )
@@ -480,6 +505,105 @@ function GasPhaseForm({
       <div className="form-actions">
         <button className="btn btn-sm" onClick={save}>Add phase</button>
         <button className="btn-ghost btn-sm" onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
+  )
+}
+
+function SubsurfaceImportPanel({
+  day, onImport, onCancel,
+}: {
+  day: DiveDay
+  onImport: (result: SubsurfaceImportResult) => void
+  onCancel: () => void
+}) {
+  const [result, setResult] = useState<SubsurfaceImportResult | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setLoading(true)
+    setError(null)
+    try {
+      const xml = await extractXml(file)
+      setResult(parseSubsurfaceXml(xml, day.cylinders))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to parse file')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  if (!result) {
+    return (
+      <div className="form-inline">
+        <strong>Import from Subsurface</strong>
+        <p className="subtitle" style={{ marginTop: 4, marginBottom: 12 }}>
+          Export your dive plan from Subsurface: File → Export → Subsurface XML.
+          Accepts .ssrm (project file) or .xml.
+          Gas volumes are calculated from your plan's SAC rates and segment depths.
+        </p>
+        <input
+          type="file"
+          accept=".ssrm,.xml"
+          onChange={handleFile}
+          disabled={loading}
+          style={{ fontSize: 13 }}
+        />
+        {loading && <p className="subtitle" style={{ marginTop: 8 }}>Parsing…</p>}
+        {error && <div className="alert alert-short" style={{ marginTop: 10 }}>{error}</div>}
+        <div className="form-actions">
+          <button className="btn-ghost btn-sm" onClick={onCancel}>Cancel</button>
+        </div>
+      </div>
+    )
+  }
+
+  const allCylinders = [...day.cylinders, ...result.suggestedCylinders]
+
+  return (
+    <div className="form-inline">
+      <strong>Import preview — {result.dives.length} dive{result.dives.length !== 1 ? 's' : ''} found</strong>
+
+      {result.suggestedCylinders.length > 0 && (
+        <p className="subtitle" style={{ marginTop: 4 }}>
+          Will also add to Equipment:{' '}
+          {result.suggestedCylinders.map(c => `${c.label} (${c.mix})`).join(', ')}
+        </p>
+      )}
+
+      {result.warnings.length > 0 && (
+        <div style={{ margin: '8px 0', padding: '8px 12px', background: '#fff8e1', border: '1px solid #f0d060', borderRadius: 4, fontSize: 12 }}>
+          {result.warnings.map((w, i) => <div key={i}>{w}</div>)}
+        </div>
+      )}
+
+      {result.dives.map(dive => (
+        <div key={dive.id} className="dive-row" style={{ marginTop: 10 }}>
+          <div className="dive-header">
+            <strong>{dive.label}</strong>
+            <span className="dive-meta">{dive.bottomDepth} ft · {dive.totalRuntime} min runtime · turn {dive.turnPressure} PSI</span>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 20px', fontSize: 12, marginTop: 4 }}>
+            {dive.gasPhases.map((p, i) => {
+              const cyl = allCylinders.find(c => c.id === p.cylinderId)
+              return (
+                <span key={i}>
+                  <strong>{cyl?.label ?? '?'}</strong> ({cyl?.mix}): {fmt(p.requiredVolume)} ft³ · {p.displayDepth}
+                </span>
+              )
+            })}
+          </div>
+        </div>
+      ))}
+
+      <div className="form-actions">
+        <button className="btn" onClick={() => onImport(result)}>
+          Import {result.dives.length} dive{result.dives.length !== 1 ? 's' : ''}
+        </button>
+        <button className="btn-ghost" onClick={onCancel}>Cancel</button>
       </div>
     </div>
   )
