@@ -5,6 +5,10 @@ import { uid, loadCylinderLibrary, upsertLibraryCylinder, deleteLibraryCylinder 
 import { fmt } from '../lib/gas'
 import { extractXml, parseSubsurfaceXml } from '../lib/subsurface'
 import type { SubsurfaceImportResult } from '../lib/subsurface'
+import { parseDm5Pdf, buildDm5ImportResult } from '../lib/dm5pdf'
+import type { Dm5PdfParseResult, Dm5ImportResult } from '../lib/dm5pdf'
+import { computePhasesFromProfile } from '../lib/profile'
+import type { ProfileRow } from '../lib/profile'
 import { Badge } from './Badge'
 
 interface Props {
@@ -286,6 +290,7 @@ function DiveSequence({
   const [editingId, setEditingId] = useState<string | null>(null)
   const [loggingId, setLoggingId] = useState<string | null>(null)
   const [showImport, setShowImport] = useState(false)
+  const [showDm5Import, setShowDm5Import] = useState(false)
 
   function remove(id: string) { onChange(day.dives.filter(d => d.id !== id)) }
 
@@ -311,6 +316,15 @@ function DiveSequence({
       dives: [...day.dives, ...result.dives],
     })
     setShowImport(false)
+  }
+
+  function confirmDm5Import(result: Dm5ImportResult) {
+    onUpdateDay({
+      ...day,
+      cylinders: [...day.cylinders, ...result.suggestedCylinders],
+      dives: [...day.dives, ...result.dives],
+    })
+    setShowDm5Import(false)
   }
 
   return (
@@ -415,12 +429,21 @@ function DiveSequence({
         />
       )}
 
+      {showDm5Import && (
+        <Dm5PdfImportPanel
+          day={day}
+          onImport={confirmDm5Import}
+          onCancel={() => setShowDm5Import(false)}
+        />
+      )}
+
       {adding
         ? <DivePlanForm cylinders={day.cylinders} onSave={add} onCancel={() => setAdding(false)} />
-        : !showImport && (
-          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+        : !showImport && !showDm5Import && (
+          <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
             <button className="btn-ghost btn-sm" onClick={() => setAdding(true)}>+ Add dive</button>
             <button className="btn-ghost btn-sm" onClick={() => setShowImport(true)}>↓ Import from Subsurface</button>
+            <button className="btn-ghost btn-sm" onClick={() => setShowDm5Import(true)}>↓ Import from DM5 PDF</button>
           </div>
         )
       }
@@ -429,89 +452,6 @@ function DiveSequence({
 }
 
 // ─── Profile-based gas calculator ────────────────────────────────────────────
-
-interface ProfileRow {
-  id: string
-  depth: number      // ft
-  arriveMin: number  // cumulative minutes from dive start (DM5 "Dive time")
-  stopMin: number    // minutes at this depth (DM5 "Stop time")
-  cylId: string
-}
-
-function computePhasesFromProfile(
-  rows: ProfileRow[],
-  sacCfm: number,
-  transitRateFtMin: number,
-): { phases: GasPhase[]; bottomDepth: number; bottomTime: number; totalRuntime: number } | null {
-  if (rows.length === 0 || sacCfm <= 0) return null
-  const sorted = [...rows].sort((a, b) => a.arriveMin - b.arriveMin)
-
-  const cylVol = new Map<string, number>()
-  const cylDur = new Map<string, number>()
-  const cylMaxDepth = new Map<string, number>()
-  const cylOrder = new Map<string, number>()
-  let orderIdx = 0
-
-  function acc(cylId: string, vol: number, dur: number, depth: number) {
-    cylVol.set(cylId, (cylVol.get(cylId) ?? 0) + vol)
-    cylDur.set(cylId, (cylDur.get(cylId) ?? 0) + dur)
-    cylMaxDepth.set(cylId, Math.max(cylMaxDepth.get(cylId) ?? 0, depth))
-    if (!cylOrder.has(cylId)) cylOrder.set(cylId, orderIdx++)
-  }
-
-  // Descent from surface to first waypoint — uses first row's cylinder
-  const first = sorted[0]
-  if (first.arriveMin > 0) {
-    const avg = first.depth / 2
-    acc(first.cylId, sacCfm * first.arriveMin * (avg / 33 + 1), first.arriveMin, first.depth)
-  }
-
-  for (let i = 0; i < sorted.length; i++) {
-    const row = sorted[i]
-    // Stop at this depth
-    if (row.stopMin > 0) {
-      acc(row.cylId, sacCfm * row.stopMin * (row.depth / 33 + 1), row.stopMin, row.depth)
-    }
-    // Transit to next row — uses current row's gas
-    if (i < sorted.length - 1) {
-      const next = sorted[i + 1]
-      const listedDur = next.arriveMin - (row.arriveMin + row.stopMin)
-      const depthChange = Math.abs(next.depth - row.depth)
-      // DM5 rounds to whole minutes at 60 ft/min, so a 30 ft transit appears as 0 min.
-      // When the table shows 0 but depths differ, infer actual transit time from the rate.
-      const dur = listedDur > 0 ? listedDur
-        : (depthChange > 0 && transitRateFtMin > 0 ? depthChange / transitRateFtMin : 0)
-      if (dur > 0) {
-        const avg = (row.depth + next.depth) / 2
-        const transitDepth = Math.max(row.depth, next.depth)
-        acc(row.cylId, sacCfm * dur * (avg / 33 + 1), dur, transitDepth)
-      }
-    }
-  }
-
-  const maxDepth = Math.max(...sorted.map(r => r.depth))
-  const deepestRows = sorted.filter(r => r.depth >= maxDepth * 0.9)
-  const lastDeep = deepestRows[deepestRows.length - 1]
-  const bottomTime = lastDeep ? lastDeep.arriveMin + lastDeep.stopMin : 0
-
-  const last = sorted[sorted.length - 1]
-  const totalRuntime = last.arriveMin + last.stopMin
-
-  const phases: GasPhase[] = [...cylVol.entries()]
-    .sort((a, b) => (cylOrder.get(a[0]) ?? 0) - (cylOrder.get(b[0]) ?? 0))
-    .map(([cylId, vol]) => {
-      const maxD = cylMaxDepth.get(cylId) ?? 0
-      return {
-        id: uid(),
-        cylinderId: cylId,
-        displayDepth: maxD >= maxDepth * 0.8 ? `${maxDepth} ft bottom` : `${maxD} ft deco`,
-        duration: Math.round(cylDur.get(cylId) ?? 0),
-        requiredVolume: Math.round(vol * 10) / 10,
-      }
-    })
-
-  return { phases, bottomDepth: maxDepth, bottomTime: Math.round(bottomTime), totalRuntime: Math.round(totalRuntime) }
-}
 
 function ProfileCalculator({
   cylinders,
@@ -924,6 +864,134 @@ function SubsurfaceImportPanel({
       <div className="form-actions">
         <button className="btn" onClick={() => onImport(result)}>
           Import {result.dives.length} dive{result.dives.length !== 1 ? 's' : ''}
+        </button>
+        <button className="btn-ghost" onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
+  )
+}
+
+function Dm5PdfImportPanel({
+  day, onImport, onCancel,
+}: {
+  day: DiveDay
+  onImport: (result: Dm5ImportResult) => void
+  onCancel: () => void
+}) {
+  const [parsed, setParsed] = useState<Dm5PdfParseResult | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [sacCfm, setSacCfm] = useState(0.75)
+
+  async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setLoading(true)
+    setError(null)
+    setParsed(null)
+    try {
+      const result = await parseDm5Pdf(file)
+      if (result.plans.length === 0) {
+        setError(result.warnings.join(' ') || 'No plan tables found in PDF.')
+      } else {
+        setParsed(result)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to parse PDF')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const preview = parsed ? buildDm5ImportResult(parsed, day.cylinders, sacCfm) : null
+
+  if (!parsed) {
+    return (
+      <div className="form-inline">
+        <strong>Import from DM5 PDF</strong>
+        <p className="subtitle" style={{ marginTop: 4, marginBottom: 12 }}>
+          Export your dive plan from Suunto DM5: print or save as PDF.
+          Both the main plan and backup plan will be imported as separate dives.
+        </p>
+        <input
+          type="file"
+          accept=".pdf"
+          onChange={handleFile}
+          disabled={loading}
+          style={{ fontSize: 13 }}
+        />
+        {loading && <p className="subtitle" style={{ marginTop: 8 }}>Parsing PDF…</p>}
+        {error && <div className="alert alert-short" style={{ marginTop: 10 }}>{error}</div>}
+        <div className="form-actions">
+          <button className="btn-ghost btn-sm" onClick={onCancel}>Cancel</button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="form-inline">
+      <strong>
+        DM5 PDF preview — {parsed.plans.length} plan{parsed.plans.length !== 1 ? 's' : ''} found
+      </strong>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10 }}>
+        <label style={{ fontSize: 12, color: '#555', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.3px' }}>
+          SAC rate (ft³/min)
+        </label>
+        <input
+          type="number"
+          step="0.05"
+          min="0.1"
+          value={sacCfm}
+          onChange={e => setSacCfm(Number(e.target.value))}
+          style={{ width: 70, border: '1px solid #ccc', borderRadius: 4, padding: '4px 8px', fontSize: 13, background: '#fafafa' }}
+        />
+        <span style={{ fontSize: 11, color: '#aaa' }}>≈ {Math.round(sacCfm / 0.035316)} L/min</span>
+      </div>
+
+      {preview && preview.suggestedCylinders.length > 0 && (
+        <p className="subtitle" style={{ marginTop: 8 }}>
+          Will also add to Equipment:{' '}
+          {preview.suggestedCylinders.map(c => `${c.label} (${c.mix})`).join(', ')}
+        </p>
+      )}
+
+      {preview && preview.warnings.filter(w => !w.includes('No matching')).length > 0 && (
+        <div style={{ margin: '8px 0', padding: '8px 12px', background: '#fff8e1', border: '1px solid #f0d060', borderRadius: 4, fontSize: 12 }}>
+          {preview.warnings.filter(w => !w.includes('No matching')).map((w, i) => <div key={i}>{w}</div>)}
+        </div>
+      )}
+
+      {preview && preview.dives.map(dive => {
+        const allCylinders = [...day.cylinders, ...(preview.suggestedCylinders ?? [])]
+        return (
+          <div key={dive.id} className="dive-row" style={{ marginTop: 10 }}>
+            <div className="dive-header">
+              <strong>{dive.label}</strong>
+              <span className="dive-meta">{dive.bottomDepth} ft · {dive.totalRuntime} min runtime</span>
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 20px', fontSize: 12, marginTop: 4 }}>
+              {dive.gasPhases.map((p, i) => {
+                const cyl = allCylinders.find(c => c.id === p.cylinderId)
+                return (
+                  <span key={i}>
+                    <strong>{cyl?.label ?? '?'}</strong> ({cyl?.mix}): {fmt(p.requiredVolume)} ft³ · {p.displayDepth}
+                  </span>
+                )
+              })}
+            </div>
+          </div>
+        )
+      })}
+
+      <div className="form-actions">
+        <button
+          className="btn"
+          disabled={!preview || preview.dives.length === 0}
+          onClick={() => preview && onImport(preview)}
+        >
+          Import {preview?.dives.length ?? 0} dive{(preview?.dives.length ?? 0) !== 1 ? 's' : ''}
         </button>
         <button className="btn-ghost" onClick={onCancel}>Cancel</button>
       </div>
